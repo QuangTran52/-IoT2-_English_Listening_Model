@@ -1,0 +1,6 @@
+# Môi trường ảo và cấu hình cục bộ
+venv/
+iotELD/
+__pycache__/
+.env
+.DS_Store
