@@ -1,6 +1,10 @@
-# Môi trường ảo và cấu hình cục bộ
+.venv/
 venv/
-iotELD/
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 .env
-.DS_Store
+.env.*
+storage/*.mp3
+storage/audio/*.mp3
