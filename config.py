@@ -10,4 +10,4 @@ STORAGE_DIR = os.getenv("STORAGE_DIR", "storage/audio")
 DAILY_TOPIC = os.getenv("DAILY_TOPIC", "daily routines at school")
 DAILY_LEVEL = os.getenv("DAILY_LEVEL", "A2")
 DAILY_DURATION = os.getenv("DAILY_DURATION", "1 min")
-DAILY_LESSON_TYPE = os.getenv("DAILY_LESSON_TYPE", "dialogue")
+DAILY_LESSON_TYPE = "random"
