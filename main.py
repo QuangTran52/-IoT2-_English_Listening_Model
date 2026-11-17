@@ -1,19 +1,62 @@
+import random
 from pathlib import Path
+from contextlib import asynccontextmanager
+from zoneinfo import ZoneInfo
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from config import STORAGE_DIR
+from routers.lesson import router as lesson_router
+from services.audio_service import generate_daily_audio
 from services.llm_service import generate_smart_lesson
 from services.tts_service import text_to_speech_multivoice
 from services.variation_service import dynamic_speech_rate
 
+scheduler = AsyncIOScheduler()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        storage_dir = Path(STORAGE_DIR)
+        if not storage_dir.is_absolute():
+            storage_dir = Path(__file__).resolve().parent / storage_dir
+
+        if not (storage_dir / "current.mp3").exists():
+            print("🔄 No daily audio found yet; generating on startup...")
+            await generate_daily_audio()
+
+        scheduler.add_job(
+            generate_daily_audio,
+            trigger=CronTrigger(
+                hour=0,
+                minute=0,
+                second=0,
+                timezone=ZoneInfo("Asia/Ho_Chi_Minh")
+            ),
+            id="daily_audio_job",
+            replace_existing=True
+        )
+        scheduler.start()
+        print("✅ Scheduler started; daily audio will generate at 00:00 Asia/Ho_Chi_Minh")
+        yield
+    finally:
+        scheduler.shutdown()
+        print("✅ Scheduler shutdown")
+
+
 app = FastAPI(
     title="IoT English Listening Device API",
     description="Backend chính thức cho thiết bị học tiếng Anh IoT",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan,
 )
 
+app.include_router(lesson_router)
 app.state.lesson_counter = 0
 
 
@@ -30,7 +73,6 @@ async def generate_lesson_endpoint(request: LessonRequest):
     try:
         chosen_type = request.lesson_type
         if chosen_type == "random":
-            import random
             chosen_type = random.choice(["dialogue", "podcast"])
 
         app.state.lesson_counter += 1
@@ -71,7 +113,6 @@ async def generate_lesson_audio_endpoint(request: LessonRequest):
     try:
         chosen_type = request.lesson_type
         if chosen_type == "random":
-            import random
             chosen_type = random.choice(["dialogue", "podcast"])
 
         app.state.lesson_counter += 1
@@ -106,18 +147,40 @@ async def generate_lesson_audio_endpoint(request: LessonRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/generate-daily-audio")
+async def generate_daily_audio_endpoint():
+    """Endpoint để trigger tạo lại file current.mp3 (dùng cho Cronjob hoặc test thủ công)"""
+    try:
+        file_path = await generate_daily_audio()
+        return {
+            "status": "success",
+            "file": file_path,
+            "message": "Daily audio generated and overwritten successfully."
+        }
+    except Exception as e:
+        print(f"❌ Lỗi khi generate daily audio: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/audio/current")
 async def get_current_audio():
+    """Endpoint để ESP32 tải file current.mp3 về thẻ nhớ"""
     storage_dir = Path(STORAGE_DIR)
     if not storage_dir.is_absolute():
         storage_dir = Path(__file__).resolve().parent / storage_dir
 
     file_path = storage_dir / "current.mp3"
 
+    # Nếu vì lý do nào đó chưa có file, tự động tạo bù ngay lập tức
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail="Current audio not found")
+        print("⚠️ current.mp3 missing on request, generating now...")
+        await generate_daily_audio()
 
-    return FileResponse(file_path, media_type="audio/mpeg")
+    return FileResponse(
+        file_path,
+        media_type="audio/mpeg",
+        filename="current.mp3"
+    )
 
 
 @app.get("/")

@@ -1,6 +1,7 @@
 .venv/
 venv/
 __pycache__/
+*.mp3
 *.pyc
 *.pyo
 *.pyd
