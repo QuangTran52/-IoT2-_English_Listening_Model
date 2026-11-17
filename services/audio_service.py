@@ -1,5 +1,6 @@
 import datetime
 import random
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -34,52 +35,75 @@ def cleanup_old_mp3() -> None:
             print(f"⚠️ Cannot delete {file.name}: {e}")
 
 
-async def generate_daily_audio() -> str:
+async def generate_daily_audio(
+    custom_topic: str | None = None,
+    force_random_topic: bool = False
+) -> dict:
+    """
+    - Khi chạy tự động lúc 0h00: custom_topic=None, force_random_topic=False -> Lấy chủ đề theo Thứ.
+    - Khi chạy Demo chen ngang: Có thể truyền custom_topic hoặc bốc ngẫu nhiên chủ đề khác.
+    """
     storage_dir = ensure_storage_dir()
-    
-    # 1. Xóa toàn bộ file MP3 cũ trong thư mục storage
     cleanup_old_mp3()
 
-    # 2. Lấy thời gian thực theo múi giờ Việt Nam
     now_vn = datetime.datetime.now(ZoneInfo("Asia/Ho_Chi_Minh"))
-    day_of_week = now_vn.weekday()            # 0 (Thứ 2) -> 6 (Chủ Nhật)
-    day_of_year = now_vn.timetuple().tm_yday  # Ngày thứ mấy trong năm (1-366)
 
-    # 3. Chọn chủ đề tương ứng với ngày trong tuần
-    topic = WEEKLY_TOPICS.get(day_of_week, "Daily conversation and greeting")
+    # 1. Chọn chủ đề
+    if custom_topic and custom_topic.strip():
+        topic = custom_topic.strip()
+    elif force_random_topic:
+        topic = random.choice(list(WEEKLY_TOPICS.values()))
+    else:
+        topic = WEEKLY_TOPICS.get(now_vn.weekday(), "Daily conversation and greeting")
 
-    # 4. Random hoàn toàn giữa dialogue và podcast
+    # 2. Xử lý random giữa dialogue và podcast
     chosen_type = DAILY_LESSON_TYPE
     if chosen_type == "random":
         chosen_type = random.choice(["dialogue", "podcast"])
 
-    # 5. Tính toán tốc độ đọc dao động mượt mà theo ngày
-    speech_rate = dynamic_speech_rate(base_rate=1.0, step=day_of_year)
+    # 3. Tính step dao động (0h00 dùng ngày trong năm, Demo dùng số ngẫu nhiên để thấy rõ sự khác biệt)
+    if custom_topic or force_random_topic:
+        step = random.randint(1, 365)
+    else:
+        step = now_vn.timetuple().tm_yday
+
+    speech_rate = dynamic_speech_rate(base_rate=1.0, step=step)
 
     print(
-        f"🚀 [Daily Audio] Đang tạo bài mới | Thứ {day_of_week + 2} | "
-        f"Kiểu: {chosen_type} | Rate: {speech_rate} | Chủ đề: {topic}"
+        f"🚀 [Generate Audio] Kiểu: {chosen_type} | Rate: {speech_rate} | Chủ đề: {topic}"
     )
 
-    # 6. Gọi LLM sinh kịch bản
+    # 4. Gọi LLM sinh kịch bản
     result = await generate_smart_lesson(
         topic_detail=topic,
         cefr_level=DAILY_LEVEL,
         target_duration=DAILY_DURATION,
         lesson_type=chosen_type,
-        variation_step=day_of_year
+        variation_step=step
     )
 
-    # 7. Chuyển kịch bản thành giọng nói MP3
+    # 5. Chuyển kịch bản thành giọng nói MP3
     audio_bytes = await text_to_speech_multivoice(
         script_text=result["script"],
         is_dialogue=(chosen_type == "dialogue"),
         speech_rate=speech_rate
     )
 
-    # 8. Lưu thành file current.mp3 mới
+    # 6. Lưu đè thành file current.mp3 mới
     out_file = storage_dir / "current.mp3"
     out_file.write_bytes(audio_bytes)
 
-    print(f"✅ Daily audio saved successfully to: {out_file}")
-    return str(out_file)
+    # 7. Cập nhật mã version (timestamp) để ESP32 phát hiện có file mới
+    version_id = str(int(time.time()))
+    (storage_dir / "version.txt").write_text(version_id, encoding="utf-8")
+
+    print(f"✅ Saved new audio: {out_file} (Version: {version_id})")
+    return {
+        "file": str(out_file),
+        "version": version_id,
+        "topic": topic,
+        "lesson_type": chosen_type,
+        "speech_rate": speech_rate,
+        "sentence_count": result.get("sentence_count", 0),
+        "script": result["script"]
+    }
